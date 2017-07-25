@@ -1,0 +1,155 @@
+Openstack Mitaka on Solaris 12 bring-up test tool.
+
+Instructions for single node and multi-node deployments follow.  The script
+variables should be inspected before invocation because they contain
+information about the environment.   The script will create a demo
+network and upload UAR images from the ./images diretory for use in testing.
+It is created for testing purposes of the Openstack environment on
+Solaris.  It is suggested that configuration management tools like Chef or
+Puppet be used to configure a production environment.  It is also suggested
+to validate the security of the setup before placing into production as this
+particular setup is only for testing purposes of this functionality.
+
+Enabling USE_SSL will enable TLS on available endpoints and MySQL with
+exception for Ironic which needs external termination because Eventlet
+lacks support for it.
+
+It is highly recommended you create and mount a new boot envirnoment before
+proceeding.  This will providate a snapshot to revert to if configuration
+needs to be applied fresh.
+
+By default this script will bring up Openstack with TLS/SSL using
+self-signed certs.  If you're using the WebGUI, then you may need
+to clear your browser's CA for "0racleOSPOC" authority between iterations
+of invoking this script.
+
+1. Download Unified Archive images to use for compute instances
+
+http://www.oracle.com/technetwork/server-storage/solaris11/downloads/unified-archives-2245488.html
+
+Downlodad the Unified Archive, which should be < 1GB.
+
+Place the images in the ./imagees directory, the script will automatically
+add them to Glance.
+
+2. Configure single node
+
+$ su root
+
+$ pkg install openstack
+
+$ vi ./os_mit_setup.py
+
+# Review parameters, important ones are in the networking section
+# and then which zfs pools to use if using more then one pool.
+
+$ ./os_mit_setup.py singlenode
+
+3. When complete you can start using Openstack via the CLI or WebGUI.  There
+are test scripts located in ./tests.
+
+# Create a VM using Kernel Zones with floating IP
+
+$ cd ./tests
+$ ./vmcreatew.sh s1
+
+# Create a VM using Kernel Zones *without* floating IP
+
+$ cd ./tests
+$ ./vmcreatew-noip.sh s1
+
+# An ssh login shell to the VM is established after VM is created.
+
+# Create a Heat orchestration stack to launch a VM and run a script that
+# touches a file in /var/tmp.
+
+# NOTE: A new minimal image with the package cloudbase-init must be
+# created to test Heat.  Here are the instructions to create it.
+
+a. In the VM which is logged into above issue the following sequence of commands:
+
+$ pkg set-publisher -P -p https://pkg.oracle.com/solaris/support
+$ pkg update
+$ pkg install cloudbase-init
+$ sed /^PermitRootLogin/s/no$/without-password/ \
+< /etc/ssh/sshd_config > /system/volatile/sed.$$ ; \
+cp /system/volatile/sed.$$ /etc/ssh/sshd_config
+$ archiveadm create /var/tmp/sol-11_3_SRU9-cbinit.uar
+
+b. Back on the controller node
+$ scp -i ~/k1.keypair root@<openstack_server_ip>:/var/tmp/*.uar ./images
+
+c. Add the image to glance
+./tests/gaddi.sh ../images/sol-11_3_SRU9-cbinit.uar sol-11_3_SRU9-cbinit
+
+$ cd ./tests
+
+# For Kernel Zones
+
+$ ./hstacktest.sh hs1
+
+# The test will validate user_data script is invoked and log in via ssh
+
+Log into Horizon WebGUI dashboard.
+
+http://servername.com:6788/horizon
+
+https://servername.com:6788/horizon
+
+For the values in this default script go to following URLs depending on if
+USE_SSL is specified in the script.
+
+Username: proj_admin_0001
+Password: adminpw
+
+Username: $TENANT_NET_LIST_username
+Password: $ADMIN_PASSWORD
+
+4. Configure multi-node
+
+On the controller node:
+
+$ pkg install openstack
+
+Modify os_kilo_python.py and change following parameters:
+SINGLE_NODE = False
+CONTROLLER_NODE = ctl.example-net1.com
+COMPUTE_NODE = comp0.example-net1.com
+
+$ ./os_mit_setup.py controller
+
+5. Prepare a bundle for next node
+
+$ ./bundle_ctl.sh
+
+# Copy to compute node
+
+$ scp bundle.tgz user@comp0.example.com:~
+
+# Log into compute node and unpack bundle
+
+$ pkg install openstack
+
+$ ssh user@comp0.example.com
+
+$ tar xzvf ~/bundle.tgz
+
+$ su
+
+$ cd os_kilo_setup
+
+$ ./bundle_comp.sh
+
+$ ./os_kilo_setup.py compute
+
+$ ./bundle_compctl.sh
+
+# Follow the steps and copy necessary files.
+
+6. Two nodes should be configured.  See step 2 for tests.
+
+7. To use commands env files can be sourced. For example:
+
+$ source ./env/admin_proj_0001.env
+
+$ openstack --help 2>&1 | less
